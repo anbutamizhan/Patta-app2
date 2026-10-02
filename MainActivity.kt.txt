@@ -1,0 +1,321 @@
+package com.patta.app
+
+import android.app.Activity
+import android.content.Intent
+import android.graphics.Bitmap
+import android.graphics.Color
+import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
+import android.view.Gravity
+import android.view.View
+import android.webkit.*
+import android.widget.*
+import java.io.File
+import java.net.HttpURLConnection
+import java.net.URL
+
+// ====== இங்க மட்டும் மாத்தினா போதும் ======
+const val SITE_URL = "https://eservices.tn.gov.in/eservicesnew/home.html"
+const val DEF_DISTRICT = "மயிலாடுதுறை|Mayiladuthurai"
+const val DEF_TALUK = "மயிலாடுதுறை|Mayiladuthurai"
+const val DEF_VILLAGE = "வில்லியநல்லூர்|Villiyanallur|Villianallur|Viliyanallur|Villiyanalloor"
+const val DEF_AREA = "ஊரகம்|Rural|கிராமப்புறம்"
+const val DEF_PHONE = "7339499470"
+// ==========================================
+
+class MainActivity : Activity() {
+    private lateinit var web: WebView
+    private lateinit var menu: LinearLayout
+    private lateinit var webBox: LinearLayout
+    private lateinit var loading: LinearLayout
+    private val handler = Handler(Looper.getMainLooper())
+    private var mode = "patta"
+
+    inner class Bridge {
+        @JavascriptInterface
+        fun ready() { handler.post { loading.visibility = View.GONE } }
+    }
+
+    private fun dp(v: Int) = (v * resources.displayMetrics.density).toInt()
+
+    private fun js(m: String): String = """
+    (function(){
+      if (window.__pattaTimer) clearInterval(window.__pattaTimer);
+      if (window.__pattaTidy) clearInterval(window.__pattaTidy);
+      var D="$DEF_DISTRICT".split("|"), T="$DEF_TALUK".split("|"), V="$DEF_VILLAGE".split("|"), R="$DEF_AREA".split("|"), PH="$DEF_PHONE", MODE="$m";
+      var tries=0;
+      if(!document.getElementById("__pattaCss")){
+        var st=document.createElement("style"); st.id="__pattaCss";
+        st.textContent=".__hide{display:none!important}";
+        (document.head||document.documentElement).appendChild(st);
+      }
+      function labelOf(el){
+        var t=(el.id||"")+" "+(el.name||"")+" "+(el.getAttribute("aria-label")||"");
+        if(el.id){var l=document.querySelector('label[for="'+el.id+'"]'); if(l) t+=" "+l.innerText;}
+        var p=el.closest("div,td,li"); if(p) t+=" "+(p.innerText||"").slice(0,60);
+        return t.toLowerCase();
+      }
+      function ownLabel(r){
+        if(r.id){var l=document.querySelector('label[for="'+r.id+'"]'); if(l) return l.innerText;}
+        var cl=r.closest("label"); if(cl) return cl.innerText;
+        var n=r.nextSibling; while(n&&!((n.textContent||"").trim())) n=n.nextSibling;
+        if(n) return n.textContent;
+        return r.value||"";
+      }
+      function setSel(s,names){
+        for(var i=0;i<s.options.length;i++){
+          var tx=s.options[i].text.trim().toLowerCase();
+          for(var j=0;j<names.length;j++){
+            if(tx===names[j].toLowerCase()||tx.indexOf(names[j].toLowerCase())>=0){
+              if(s.selectedIndex!==i){ s.selectedIndex=i; s.dispatchEvent(new Event("change",{bubbles:true})); if(window.jQuery) try{jQuery(s).trigger("change");}catch(e){} }
+              return true;
+            }
+          }
+        }
+        return false;
+      }
+      function isPhone(i){
+        var lb=((i.id||"")+" "+(i.name||"")+" "+(i.placeholder||"")).toLowerCase();
+        return /mobile|phone|மொபைல்|தொலைபேசி|கைப்பேசி/.test(lb)||i.value===PH;
+      }
+      function vis(el){
+        for(var e=el;e&&e!==document.documentElement;e=e.parentElement){
+          var had=e.classList&&e.classList.contains("__hide");
+          if(had) e.classList.remove("__hide");
+          var cs=getComputedStyle(e);
+          var hidden=(cs.display==="none"||cs.visibility==="hidden");
+          if(had) e.classList.add("__hide");
+          if(hidden) return false;
+        }
+        return true;
+      }
+      function tidy(){
+        var isForm=document.querySelectorAll("input[type=radio]").length>0;
+        if(!isForm){ document.querySelectorAll(".__hide").forEach(function(e){e.classList.remove("__hide");}); return; }
+        var keep=new Set(), leaf=new Set();
+        function addAnc(el){ for(var e=el.parentElement;e&&e!==document.documentElement;e=e.parentElement) keep.add(e); }
+        document.querySelectorAll("input,select,button,textarea").forEach(function(c){
+          var tp=(c.type||"").toLowerCase();
+          if(c.tagName==="INPUT"&&(tp==="radio"||tp==="checkbox"||tp==="hidden")) return;
+          if(!vis(c)) return;
+          if(c.tagName==="INPUT"&&isPhone(c)) return;
+          if(c.tagName==="SELECT"){
+            var lb=labelOf(c);
+            var sub=lb.indexOf("உட்பிரிவு")>=0||lb.indexOf("sub")>=0;
+            var vil=!sub&&(/district|taluk|village|மாவட்ட|வட்ட|ஊர்|கிராம/.test(lb));
+            if(vil&&!window.__showVillage) return;
+          }
+          leaf.add(c); addAnc(c);
+          var lab=null;
+          if(c.id) lab=document.querySelector('label[for="'+c.id+'"]');
+          if(!lab){
+            var pv=c.previousElementSibling;
+            if(pv&&pv.querySelector&&!pv.querySelector("input,select,button")&&(pv.innerText||"").length<40) lab=pv;
+          }
+          if(lab&&!lab.contains(c)){ leaf.add(lab); addAnc(lab); }
+          if(!c.__lbl){
+            var nm=null, at=((c.id||"")+" "+(c.name||"")+" "+(c.placeholder||"")).toLowerCase();
+            if(c.tagName==="SELECT"){
+              var l2=labelOf(c);
+              if(l2.indexOf("உட்பிரிவு")>=0||l2.indexOf("sub")>=0) nm="உட்பிரிவு எண்";
+            } else if(c.tagName==="INPUT"&&(tp==="text"||tp==="tel"||tp==="number"||tp==="")){
+              nm=/otp|கடவு|captcha/.test(at)?"கடவுச்சொல் (OTP)":(MODE==="survey"?"புல எண்":"பட்டா எண்");
+            }
+            c.__lbl=true;
+            if(nm){
+              var d=document.createElement("div"); d.className="__ours"; d.textContent=nm;
+              d.style.cssText="font-weight:bold;font-size:20px;margin:10px 0 4px 0;color:#0d3b66;";
+              c.parentElement.insertBefore(d,c);
+            }
+          }
+        });
+        var all=document.body.querySelectorAll(".__hide");
+        if(leaf.size===0){ all.forEach(function(e){e.classList.remove("__hide");}); return; }
+        function walk(node){
+          Array.prototype.forEach.call(node.children,function(ch){
+            var tag=ch.tagName;
+            if(tag==="SCRIPT"||tag==="STYLE"||tag==="LINK"||tag==="META"||tag==="NOSCRIPT") return;
+            if(ch.classList.contains("__ours")) return;
+            if(leaf.has(ch)){ ch.classList.remove("__hide"); }
+            else if(keep.has(ch)){ ch.classList.remove("__hide"); walk(ch); }
+            else ch.classList.add("__hide");
+          });
+        }
+        if(document.body) walk(document.body);
+        if(!window.__ready){ window.__ready=true; try{Android.ready();}catch(e){} window.scrollTo(0,0); }
+      }
+      function goForm(){
+        if(window.__homeDone) return;
+        if(document.querySelectorAll("input[type=radio]").length>0) return;
+        var best=null,bl=1e9;
+        document.querySelectorAll("a,div,li,span,p,h1,h2,h3,h4,button").forEach(function(e){
+          var t=(e.innerText||"").replace(/\s+/g," ").trim();
+          if(t.length<8||t.length>140) return;
+          var tl=t.toLowerCase();
+          var card=(t.indexOf("புலப்பட")>=0&&t.indexOf("சிட்டா")>=0)||(tl.indexOf("view patta")>=0&&tl.indexOf("chitta")>=0);
+          if(card&&t.length<bl){best=e;bl=t.length;}
+        });
+        if(best){ window.__homeDone=true; (best.closest("a")||best).click(); }
+      }
+      window.__pattaTimer=setInterval(function(){
+        tries++; if(tries>60){clearInterval(window.__pattaTimer);return;}
+        goForm();
+        document.querySelectorAll("select").forEach(function(s){
+          if(s.__done) return;
+          var lb=labelOf(s), ok=false;
+          if(lb.indexOf("rural")>=0||lb.indexOf("ஊரக")>=0||lb.indexOf("area")>=0) ok=setSel(s,R);
+          else if(lb.indexOf("district")>=0||lb.indexOf("மாவட்ட")>=0) ok=setSel(s,D);
+          else if(lb.indexOf("taluk")>=0||lb.indexOf("வட்ட")>=0) ok=setSel(s,T);
+          else if(lb.indexOf("village")>=0||lb.indexOf("ஊர்")>=0||lb.indexOf("கிராம")>=0) ok=setSel(s,V);
+          if(ok) s.__done=true;
+        });
+        var groups={};
+        document.querySelectorAll("input[type=radio]").forEach(function(r){
+          (groups[r.name]=groups[r.name]||[]).push(r);
+        });
+        Object.keys(groups).forEach(function(k){
+          var g=groups[k];
+          if(g.length>=3&&!window.__modeDone){
+            var r=g[MODE==="survey"?1:0];
+            if(!r.checked) r.click();
+            window.__modeDone=true;
+          }
+        });
+        if(!window.__areaDone){
+          document.querySelectorAll("input[type=radio]").forEach(function(r){
+            if(window.__areaDone) return;
+            var t=ownLabel(r).toLowerCase();
+            for(var k=0;k<R.length;k++){
+              if(t.indexOf(R[k].toLowerCase())>=0){ if(!r.checked) r.click(); window.__areaDone=true; break; }
+            }
+          });
+        }
+        document.querySelectorAll("input").forEach(function(i){
+          if(i.__done) return;
+          var lb=((i.id||"")+" "+(i.name||"")+" "+(i.placeholder||"")).toLowerCase();
+          if((i.type==="text"||i.type==="tel"||i.type==="number")&&/mobile|phone|மொபைல்|தொலைபேசி|கைப்பேசி/.test(lb)){
+            i.value=PH; i.dispatchEvent(new Event("input",{bubbles:true})); i.dispatchEvent(new Event("change",{bubbles:true}));
+            i.__done=true;
+          }
+        });
+      },700);
+      window.__pattaTidy=setInterval(tidy,500);
+    })();
+    """.trimIndent()
+
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+
+        val root = FrameLayout(this)
+
+        // ---- முகப்பு: ரெண்டே பட்டன் ----
+        menu = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            gravity = Gravity.CENTER
+            setPadding(dp(32), dp(32), dp(32), dp(32))
+            setBackgroundColor(Color.WHITE)
+        }
+        fun bigButton(text: String, color: String, onClick: () -> Unit) = Button(this).apply {
+            this.text = text
+            textSize = 24f
+            setTextColor(Color.WHITE)
+            setBackgroundColor(Color.parseColor(color))
+            setOnClickListener { onClick() }
+            layoutParams = LinearLayout.LayoutParams(-1, dp(110)).apply { setMargins(0, dp(12), 0, dp(12)) }
+        }
+        menu.addView(bigButton("பட்டா எண்", "#1565C0") { openMode("patta") })
+        menu.addView(bigButton("புல எண் (சர்வே)", "#2E7D32") { openMode("survey") })
+
+        // ---- வெப் பகுதி ----
+        webBox = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; visibility = View.GONE }
+        val bar = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            setBackgroundColor(Color.parseColor("#1565C0"))
+            setPadding(dp(8), dp(4), dp(8), dp(4))
+        }
+        bar.addView(Button(this).apply { text = "← முகப்பு"; setOnClickListener { showMenu() } })
+        bar.addView(Button(this).apply {
+            text = "ஊர் மாற்று"
+            setOnClickListener { web.evaluateJavascript("window.__showVillage=!window.__showVillage;", null) }
+        })
+        web = WebView(this)
+        loading = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            gravity = Gravity.CENTER
+            setBackgroundColor(Color.WHITE)
+            addView(ProgressBar(this@MainActivity))
+            addView(TextView(this@MainActivity).apply {
+                text = "காத்திருக்கவும்..."
+                textSize = 20f
+                gravity = Gravity.CENTER
+                setPadding(0, dp(16), 0, 0)
+            })
+            isClickable = true
+        }
+        val holder = FrameLayout(this)
+        holder.addView(web)
+        holder.addView(loading)
+        webBox.addView(bar)
+        webBox.addView(holder, LinearLayout.LayoutParams(-1, 0, 1f))
+
+        root.addView(menu)
+        root.addView(webBox)
+        setContentView(root)
+
+        web.settings.apply {
+            javaScriptEnabled = true
+            domStorageEnabled = true
+            useWideViewPort = true
+            loadWithOverviewMode = true
+            setSupportZoom(true)
+            builtInZoomControls = true
+            displayZoomControls = false
+        }
+        web.addJavascriptInterface(Bridge(), "Android")
+        CookieManager.getInstance().setAcceptCookie(true)
+        web.webViewClient = object : WebViewClient() {
+            override fun onPageStarted(v: WebView, url: String, f: Bitmap?) { v.evaluateJavascript(js(mode), null) }
+            override fun onPageFinished(v: WebView, url: String) { v.evaluateJavascript(js(mode), null) }
+        }
+        web.setDownloadListener { url, ua, _, mime, _ -> downloadPdf(url, ua, mime) }
+    }
+
+    private fun openMode(m: String) {
+        mode = m
+        menu.visibility = View.GONE
+        webBox.visibility = View.VISIBLE
+        loading.visibility = View.VISIBLE
+        handler.postDelayed({ loading.visibility = View.GONE }, 20000)
+        web.loadUrl(SITE_URL)
+    }
+
+    private fun showMenu() {
+        webBox.visibility = View.GONE
+        menu.visibility = View.VISIBLE
+        web.loadUrl("about:blank")
+    }
+
+    private fun downloadPdf(url: String, ua: String, mime: String?) {
+        Toast.makeText(this, "PDF எடுக்கிறது...", Toast.LENGTH_SHORT).show()
+        Thread {
+            try {
+                val c = URL(url).openConnection() as HttpURLConnection
+                c.setRequestProperty("User-Agent", ua)
+                CookieManager.getInstance().getCookie(url)?.let { c.setRequestProperty("Cookie", it) }
+                val f = File(cacheDir, "patta.pdf")
+                c.inputStream.use { i -> f.outputStream().use { o -> i.copyTo(o) } }
+                handler.post { startActivity(Intent(this, PdfActivity::class.java).putExtra("path", f.absolutePath)) }
+            } catch (e: Exception) {
+                handler.post { Toast.makeText(this, "PDF எடுக்க முடியல: ${e.message}", Toast.LENGTH_LONG).show() }
+            }
+        }.start()
+    }
+
+    @Deprecated("Deprecated in Java")
+    override fun onBackPressed() {
+        if (webBox.visibility == View.VISIBLE) {
+            if (web.canGoBack()) web.goBack() else showMenu()
+        } else super.onBackPressed()
+    }
+}
